@@ -1,4 +1,6 @@
 using API.Entities;
+using API.Interfaces;
+using API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -9,13 +11,15 @@ namespace API.Controllers
     public class AdminController : BaseApiController
     {
         private readonly UserManager<AppUser> _userManager;
+        private readonly IUnitOfwork _uow;
 
-        public AdminController(UserManager<AppUser> userManager)
+        public AdminController(UserManager<AppUser> userManager, IUnitOfwork uow)
         {
             _userManager = userManager;
+            _uow = uow;
         }
 
-        [Authorize(Policy ="RequireAdminRole")]
+        [Authorize(Policy = "RequireAdminRole")]
         [HttpGet("users-with-roles")]
         public async Task<ActionResult> GetUsersWithRoles()
         {
@@ -32,9 +36,9 @@ namespace API.Controllers
             return Ok(users);
         }
 
-        [Authorize(Policy ="RequireAdminRole")]
+        [Authorize(Policy = "RequireAdminRole")]
         [HttpPost("edit-roles/{username}")]
-        public async Task<ActionResult> EditRoles(string username, [FromQuery]string roles)
+        public async Task<ActionResult> EditRoles(string username, [FromQuery] string roles)
         {
             if (string.IsNullOrEmpty(roles)) return BadRequest("You must select at least one role");
 
@@ -54,14 +58,54 @@ namespace API.Controllers
 
             if (!result.Succeeded) return BadRequest("Failed to remove from roles");
 
-            return Ok(await _userManager. GetRolesAsync(user));
+            return Ok(await _userManager.GetRolesAsync(user));
         }
 
-        [Authorize(Policy ="ModeratePhotoRole")]
+        [Authorize(Policy = "ModeratePhotoRole")]
         [HttpGet("photos-to-moderate")]
-        public ActionResult GetPhotosForModeration()
+        public async Task<ActionResult> GetPhotosForModeration()
         {
-            return Ok("Admins or moderatos can see this");
+            var photos = await
+            _uow.PhotoRepository.GetUnapprovedPhotos();
+            return Ok(photos);
+        }
+
+        [Authorize(Policy = "ModeratePhotoRole")]
+        [HttpPost("approve-photo/{photoId}")]
+        public async Task<ActionResult> ApprovePhoto(int photoId)
+        {
+            var photo = await
+           _uow.PhotoRepository.GetPhotoById(photoId);
+            if (photo == null) return NotFound("Could not find photo");
+            photo.IsApproved = true;
+            var user = await
+           _uow.UserRepository.GetUserByPhotoId(photoId);
+            if (!user.Photos.Any(x => x.IsMain)) photo.IsMain = true;
+            await _uow.Complete();
+            return Ok();
+        }
+
+        [Authorize(Policy = "ModeratePhotoRole")]
+        [HttpPost("reject-photo/{photoId}")]
+        public async Task<ActionResult> RejectPhoto(int photoId)
+        {
+            var photo = await
+           _uow.PhotoRepository.GetPhotoById(photoId);
+            if (photo.PublicId != null)
+            {
+               // var result = await
+               //_photoService.DeletePhotoAsync(photo.PublicId);
+                //if (result.Result == "ok")
+                {
+                    _uow.PhotoRepository.RemovePhoto(photo);
+                }
+            }
+            else
+            {
+                _uow.PhotoRepository.RemovePhoto(photo);
+            }
+            await _uow.Complete();
+            return Ok();
         }
     }
 }
